@@ -38,31 +38,44 @@
             accessKeySecret: process.env.ALIBABA_CLOUD_ACCESS_KEY_SECRET,
             stsToken: process.env.ALIBABA_CLOUD_SECURITY_TOKEN, // Vercel 会自动从角色获取
             endpoint: process.env.TABLE_STORE_ENDPOINT,
-            instanceName: process.env.TABLE_STORE_INSTANCE_NAME
+            instancename: process.env.TABLE_STORE_INSTANCE_NAME // 注意：这里是全小写的 instancename
         });
 
         try {
-            const getParams = {
+            // 使用 getRange 来查找邀请码
+            const rangeParams = {
                 tableName: 'invitation_codes',
-                primaryKey: [{ 'code': invitationCode }],
+                direction: TableStore.Direction.FORWARD,
+                inclusiveStartPrimaryKey: [{ 'code': invitationCode }],
+                exclusiveEndPrimaryKey: [{ 'code': invitationCode + '\0' }], // 确保只获取完全匹配的行
+                limit: 1
             };
-            const getResult = await client.getRow(getParams);
-            const row = getResult.row;
-
-            if (!row || !row.attributeColumns) {
+            
+            const rangeResult = await client.getRange(rangeParams);
+            
+            // 检查是否找到数据
+            if (!rangeResult.rows || rangeResult.rows.length === 0) {
                 return response.status(200).json({ success: false, message: '无效的邀请码。' });
             }
-
-            const used = row.attributeColumns.find(col => col.name === 'used')?.value || false;
+            
+            // 获取第一行数据
+            const row = rangeResult.rows[0];
+            
+            // 检查邀请码是否已被使用
+            const usedAttr = row.attributes.find(attr => attr.columnName === 'used');
+            const used = usedAttr ? usedAttr.columnValue : false;
+            
             if (used) {
                 return response.status(200).json({ success: false, message: '邀请码已被使用。' });
             }
-
+            
+            // 更新邀请码状态为已使用
             const updateParams = {
                 tableName: 'invitation_codes',
-                primaryKey: [{ 'code': invitationCode }],
+                primaryKey: row.primaryKey, // 使用从 getRange 获取的精确主键格式
                 updateOfAttributeColumns: [{ 'PUT': [{ 'used': true }] }],
             };
+            
             await client.updateRow(updateParams);
 
             // 验证成功，生成一个JWT令牌
